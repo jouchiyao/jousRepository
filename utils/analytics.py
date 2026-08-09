@@ -19,12 +19,15 @@ _CODE_HINTS = ("code", "编码", "编号", "工号")
 
 
 def analyzable_numeric_columns(df: pd.DataFrame) -> list[str]:
-    """参与异常/相关分析的数值列：剔除编码、编号、工号类标识列（如 prod_code）。"""
-    return [
-        c
-        for c in numeric_columns(df)
-        if not any(h in str(c).lower() for h in _CODE_HINTS)
-    ]
+    """参与异常/相关分析的数值列：剔除编码/编号/工号标识列与 0/1 标志列。"""
+    out = []
+    for c in numeric_columns(df):
+        if any(h in str(c).lower() for h in _CODE_HINTS):
+            continue
+        if df[c].nunique(dropna=True) <= 2:
+            continue  # 如“是否促销”等 0/1 标志，不做异常/相关
+        out.append(c)
+    return out
 
 
 # ---------- 1. 描述性统计 ----------
@@ -202,6 +205,112 @@ def pareto(df: pd.DataFrame, group_col: str, value_col: str) -> dict[str, Any]:
     }
 
 
+def abc_classification(series: pd.Series, a_bound: float = 0.7, b_bound: float = 0.9) -> pd.DataFrame:
+    """ABC 分类：按贡献度划分 A(重点) / B(次重点) / C(长尾)。"""
+    g = series.sort_values(ascending=False)
+    total = float(g.sum())
+    if total <= 0:
+        return pd.DataFrame(columns=["项", "值", "占比", "累计占比", "ABC"])
+    cum = g.cumsum() / total
+    cls = []
+    for v in cum:
+        if v <= a_bound:
+            cls.append("A")
+        elif v <= b_bound:
+            cls.append("B")
+        else:
+            cls.append("C")
+    return pd.DataFrame(
+        {
+            "项": g.index,
+            "值": g.values,
+            "占比": g.values / total,
+            "累计占比": cum.values,
+            "ABC": cls,
+        }
+    )
+
+
+def xyz_classification(df: pd.DataFrame, time_col: str, group_col: str, qty_col: str) -> pd.DataFrame:
+    """XYZ 分类：按月度需求波动系数(CV)划分 X(稳定) / Y(波动) / Z(高波动)。"""
+    d = df.copy()
+    d["_ym"] = pd.to_datetime(d[time_col], errors="coerce").dt.to_period("M")
+    d = d.dropna(subset=["_ym", qty_col])
+    pivot = d.groupby(["_ym", group_col])[qty_col].sum().unstack(fill_value=0)
+    mean = pivot.mean()
+    std = pivot.std(ddof=0)
+    cv = (std / mean.replace(0, np.nan)).fillna(99.0)
+
+    def to_cls(v):
+        if v < 0.5:
+            return "X"
+        if v < 1.0:
+            return "Y"
+        return "Z"
+
+    return pd.DataFrame(
+        {
+            "项": cv.index,
+            "月均销量": mean.round(1).values,
+            "CV": cv.round(3).values,
+            "XYZ": [to_cls(float(v)) for v in cv.values],
+        }
+    )
+
+
+def promo_lift_by_category(df: pd.DataFrame, promo_col: str, qty_col: str, cat_col: str) -> pd.DataFrame:
+    """促销归因：各品类的促销销量提升幅度。"""
+    d = df.copy()
+    d["_p"] = d[promo_col].astype(bool)
+    rows = []
+    for cat, sub in d.groupby(cat_col, dropna=False):
+        on = sub[sub["_p"]]
+        off = sub[~sub["_p"]]
+        if len(on) and len(off):
+            lift = float(on[qty_col].mean() / off[qty_col].mean() - 1)
+            rows.append((cat, int(len(on)), int(len(off)), round(lift, 3)))
+    return pd.DataFrame(rows, columns=["品类", "促销记录", "非促销记录", "销量提升"])
+
+
+def kpi_summary(df: pd.DataFrame, semantics: dict[str, Any]) -> dict[str, Any]:
+    """经营 KPI：销售额/毛利率/客单价/会员占比/环比同比/促销表现。"""
+    d = df.copy()
+    mcol = semantics.get("measure_amount")
+    qcol = semantics.get("measure_qty")
+    tcol = semantics.get("time")
+    out: dict[str, Any] = {}
+    if not mcol or mcol not in d.columns:
+        return out
+    total_sales = float(d[mcol].sum())
+    out["总销售额"] = total_sales
+    cost_col = next((c for c in d.columns if "成本" in str(c)), None)
+    if cost_col and cost_col in d.columns:
+        total_cost = float(d[cost_col].sum())
+        out["毛利率"] = (total_sales - total_cost) / total_sales if total_sales else None
+    order_col = next((c for c in d.columns if "订单数" in str(c) and "会员" not in str(c)), None)
+    if order_col and order_col in d.columns:
+        out["客单价"] = total_sales / float(d[order_col].sum()) if d[order_col].sum() else None
+    mem_col = next((c for c in d.columns if "会员订单" in str(c)), None)
+    if mem_col and mem_col in d.columns and order_col:
+        out["会员订单占比"] = float(d[mem_col].sum()) / float(d[order_col].sum()) if d[order_col].sum() else None
+    promo_col = next((c for c in d.columns if "促销" in str(c)), None)
+    if promo_col is not None and promo_col in d.columns and qcol and qcol in d.columns:
+        on = d[d[promo_col].astype(bool)]
+        off = d[~d[promo_col].astype(bool)]
+        if len(on) and len(off):
+            out["促销占比"] = float(len(on) / len(d))
+            out["促销销量提升"] = float(on[qcol].mean() / off[qcol].mean() - 1)
+    if tcol and tcol in d.columns:
+        d["_ym"] = pd.to_datetime(d[tcol], errors="coerce").dt.to_period("M")
+        monthly = d.groupby("_ym")[mcol].sum().sort_index()
+        if len(monthly) >= 2:
+            out["最近月份"] = str(monthly.index[-1])
+            out["月度环比"] = float(monthly.iloc[-1] / monthly.iloc[-2] - 1)
+        if len(monthly) >= 13:
+            out["月度同比"] = float(monthly.iloc[-1] / monthly.iloc[-13] - 1)
+    return out
+
+
 # ---------- 规范性：库存周转 ----------
 
 def inventory_turnover(df: pd.DataFrame, time_col: str, qty_col: str, inventory_col: str | None = None) -> dict[str, Any]:
@@ -219,11 +328,13 @@ def inventory_turnover(df: pd.DataFrame, time_col: str, qty_col: str, inventory_
         inv = d.groupby("月份", dropna=False)[inventory_col].mean()
         turnover = monthly / inv.replace(0, np.nan)
         days = 30.4 / turnover
+        inv_sales = inv / monthly.replace(0, np.nan)
         result.update(
             {
                 "method": "库存周转率 = 月销量 / 月均库存；周转天数 ≈ 30.4 / 周转率",
                 "turnover": turnover,
                 "days": days,
+                "inv_sales_ratio": inv_sales,
             }
         )
     else:
@@ -294,6 +405,40 @@ def time_series_analysis(
     slope, intercept = np.polyfit(x, y, 1)
     r2 = float(np.corrcoef(x, y)[0, 1] ** 2) if len(x) > 1 else 0.0
 
+    # ---- 回测评估：留出最后 20% 做样本外验证，与朴素基线对比 ----
+    backtest = None
+    if len(ts) >= 8:
+        n_test = max(2, int(len(ts) * 0.2))
+        train, test = ts.iloc[:-n_test], ts.iloc[-n_test:]
+        x_tr = np.arange(len(train), dtype=float)
+        slope_tr, intercept_tr = np.polyfit(x_tr, train.values.astype(float), 1)
+        if freq == "ME":
+            key_tr, key_te = train.index.month, test.index.month
+        elif freq == "YE":
+            key_tr, key_te = train.index.year, test.index.year
+        else:
+            key_tr, key_te = train.index.dayofweek, test.index.dayofweek
+        season_tr = train.groupby(key_tr).mean()
+        preds = []
+        for i, k in enumerate(key_te):
+            base = intercept_tr + slope_tr * (len(train) + i)
+            s = float(season_tr.loc[k]) if k in season_tr.index else 0.0
+            preds.append(max(base + s, 0.0))
+        preds = np.array(preds)
+        actual = test.values.astype(float)
+        mask = actual > 0
+        mape = float(np.mean(np.abs((actual[mask] - preds[mask]) / actual[mask]))) if mask.sum() else None
+        naive = np.roll(actual, 1)
+        naive[0] = actual[0]
+        mape_naive = float(np.mean(np.abs((actual[mask] - naive[mask]) / actual[mask]))) if mask.sum() else None
+        backtest = {
+            "n_test": int(n_test),
+            "mape": mape,
+            "mape_naive": mape_naive,
+            "rmse": float(np.sqrt(np.mean((actual - preds) ** 2))),
+            "improve": (1 - mape / mape_naive) if mape and mape_naive else None,
+        }
+
     future_idx = pd.date_range(start=ts.index[-1], periods=forecast_n + 1, freq=freq)[1:]
     fc = []
     for k, fidx in enumerate(future_idx, start=1):
@@ -318,6 +463,7 @@ def time_series_analysis(
         "slope": round(float(slope), 4),
         "r2": r2,
         "n": int(len(ts)),
+        "backtest": backtest,
         "model": "线性回归 + 周期均值季节调整（简易 STL 分解：移动平均趋势 + 季节项 + 残差）",
     }
 
@@ -396,9 +542,31 @@ def run_analysis_pipeline(df: pd.DataFrame, semantics: dict[str, Any], forecast_
     if pgroup and mcol:
         result["pareto"] = pareto(d, pgroup, mcol)
         result["pareto_group"] = pgroup
+        g_series = d.groupby(pgroup, dropna=False)[mcol].sum().sort_values(ascending=False)
+        result["abc"] = abc_classification(g_series)
+        qcol = semantics.get("measure_qty")
+        if tcol and qcol and qcol in d.columns:
+            result["xyz"] = xyz_classification(d, tcol, pgroup, qcol)
+            abc_df = result["abc"][["项", "ABC"]]
+            xyz_df = result["xyz"][["项", "XYZ", "月均销量", "CV"]]
+            merged = abc_df.merge(xyz_df, on="项", how="outer").fillna({"ABC": "C", "XYZ": "Z"})
+            result["abc_xyz"] = merged.sort_values(["ABC", "XYZ"])
     else:
         result["pareto"] = None
         result["pareto_group"] = None
+        result["abc"] = None
+        result["xyz"] = None
+        result["abc_xyz"] = None
+
+    # 经营 KPI 与促销归因
+    result["kpi"] = kpi_summary(d, semantics)
+    promo_col = next((c for c in d.columns if "促销" in str(c)), None)
+    cat_col = semantics.get("category")
+    qcol = semantics.get("measure_qty")
+    if promo_col is not None and cat_col and mcol:
+        result["promo_lift"] = promo_lift_by_category(d, promo_col, qcol or mcol, cat_col)
+    else:
+        result["promo_lift"] = None
 
     # 时序（默认：金额，无则数量）
     if tcol and mcol:

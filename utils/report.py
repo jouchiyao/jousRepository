@@ -49,8 +49,12 @@ def _build_strategy(results: dict[str, Any], labels: dict[str, str]) -> list[str
         if days is not None and len(days):
             latest = float(days.iloc[-1])
             mean = float(days.mean())
+            ir = turnover.get("inv_sales_ratio")
+            ir_txt = ""
+            if ir is not None and len(ir):
+                ir_txt = f"；库存可售月数（存销比）约 {_f(float(ir.iloc[-1]))} 个月"
             tips.append(
-                f"库存周转策略：当前周转天数约 {_f(latest)} 天（平均 {_f(mean)} 天）。"
+                f"库存周转策略：当前周转天数约 {_f(latest)} 天（平均 {_f(mean)} 天{ir_txt}）。"
                 "若周转天数偏高，建议按 ABC 分类设置差异化安全库存、缩短补货周期；"
                 "若偏低，注意防范缺货与效期风险。"
             )
@@ -67,6 +71,28 @@ def _build_strategy(results: dict[str, Any], labels: dict[str, str]) -> list[str
             f"数据质量策略：共发现 {n} 个异常值（主要位于 {cols}）。"
             + f"建议建立 SQL 级校验规则（{rules}），在入库环节拦截异常，"
             + "并对已识别异常单独标记、单独分析，避免污染趋势判断。"
+        )
+    abc_xyz = results.get("abc_xyz")
+    if abc_xyz is not None and len(abc_xyz):
+        counts = abc_xyz.groupby(["ABC", "XYZ"]).size()
+        ax = int(counts.get(("A", "X"), 0))
+        cz = int(counts.get(("C", "Z"), 0))
+        tips.append(
+            f"ABC-XYZ 库存矩阵：共 {len(abc_xyz)} 个 SKU，A-X（高值稳定）{ax} 个建议低安全库存+高频补货；"
+            f"C-Z（低值高波动）{cz} 个建议按单采购或淘汰，释放库存资金。"
+        )
+    promo = results.get("promo_lift")
+    if promo is not None and len(promo):
+        best = promo.loc[promo["销量提升"].idxmax()]
+        tips.append(
+            f"促销策略：{best['品类']} 促销销量提升最高（{best['销量提升']:+.1%}），"
+            "建议将促销预算向高弹性品类倾斜；低弹性品类以价格维护为主，避免毛利损失。"
+        )
+    kpi = results.get("kpi") or {}
+    if kpi.get("会员订单占比") is not None:
+        tips.append(
+            f"会员策略：当前会员订单占比 {kpi['会员订单占比']:.1%}，"
+            "建议通过会员日、积分兑换与精准营销提升复购与客单价。"
         )
     ts = results.get("ts")
     if ts and ts.get("slope") is not None:
@@ -144,6 +170,24 @@ def build_report_md(results: dict[str, Any]) -> str:
         f"- 数据共 **{q['行数']:,} 行**、**{q['列数']} 列**，重复行 {q['重复行']:,}，"
         f"缺失单元格 {q['缺失单元格']:,} 个，数值列 {q['数值列']} 个。"
     )
+    kpi = results.get("kpi") or {}
+    if kpi.get("总销售额") is not None:
+        L.append("")
+        L.append("**经营 KPI**：")
+        L.append(
+            f"- 累计销售额 **{_f(kpi['总销售额'])}**，毛利率 {_pct(kpi.get('毛利率'))}，"
+            f"客单价 {_f(kpi.get('客单价'))} 元，会员订单占比 {_pct(kpi.get('会员订单占比'))}"
+        )
+        if kpi.get("月度环比") is not None:
+            mom = f"- 最近月份（{kpi.get('最近月份', '')}）销售额环比 {_pct(kpi['月度环比'])}"
+            if kpi.get("月度同比") is not None:
+                mom += f"，同比 {_pct(kpi['月度同比'])}"
+            L.append(mom)
+        if kpi.get("促销销量提升") is not None:
+            L.append(
+                f"- 促销记录占比 {_pct(kpi.get('促销占比'))}，"
+                f"促销平均带动销量提升 {_pct(kpi['促销销量提升'])}"
+            )
     desc = results["describe"]
     num_cols = results.get("numeric_cols") or []
     if num_cols:
@@ -185,6 +229,23 @@ def build_report_md(results: dict[str, Any]) -> str:
 
         for a, b, r in corr_top3:
             L.append(f"  - {explain_correlation(a, b, r)}")
+    abc = results.get("abc")
+    if abc is not None and len(abc):
+        cnt = abc["ABC"].value_counts()
+        L.append("")
+        L.append(
+            f"**ABC 贡献分层**：A 类 {int(cnt.get('A', 0))} 项、B 类 {int(cnt.get('B', 0))} 项、"
+            f"C 类 {int(cnt.get('C', 0))} 项（按累计贡献 70% / 90% 划分）"
+        )
+    promo = results.get("promo_lift")
+    if promo is not None and len(promo):
+        L.append("")
+        L.append("**促销归因**：")
+        for _, r in promo.iterrows():
+            L.append(
+                f"  - {r['品类']}：促销销量提升 {r['销量提升']:+.1%}"
+                f"（促销 {int(r['促销记录'])} 条 / 非促销 {int(r['非促销记录'])} 条）"
+            )
     attr = results.get("anomaly_attribution") or {}
     if attr:
         L.append("")
@@ -217,6 +278,13 @@ def build_report_md(results: dict[str, Any]) -> str:
         L.append("未来 3 期预测：")
         for i, (idx, v) in enumerate(zip(ts["forecast_index"], ts["forecast"]), start=1):
             L.append(f"  - 第 {i} 期（{idx}）：**{_f(v)}**")
+        bt = ts.get("backtest")
+        if bt and bt.get("mape") is not None and bt.get("mape_naive") is not None:
+            improve = f"，误差较朴素基线改善 {bt['improve']:.1%}" if bt.get("improve") is not None else ""
+            L.append(
+                f"- **样本外回测**（留出后 {bt['n_test']} 期）：MAPE={bt['mape']:.1%}"
+                f"（朴素基线 {bt['mape_naive']:.1%}{improve}），RMSE={_f(bt.get('rmse'))}"
+            )
     else:
         L.append("时间字段或度量字段不足，无法进行时序预测。建议提供「日期 + 金额/数量」字段。")
     L.append("")

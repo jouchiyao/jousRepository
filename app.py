@@ -259,17 +259,11 @@ def sidebar_data_source(tracker, visitor_id) -> None:
 
     else:
         demo_name = st.sidebar.selectbox("演示数据", list(DEMOS.keys()), key="demo_name")
-        is_real = demo_name.startswith("真实")
-        n = st.sidebar.slider(
-            "模拟数据行数（真实数据自动使用全量）",
-            500, 10000, 3000, step=500, key="demo_n", disabled=is_real,
-        )
+        st.sidebar.caption("内置 18 个月零售快消门店销售示例（约 8 万行，含促销/会员/库存维度）")
         if st.sidebar.button("✨ 载入示例数据", key="btn_demo"):
-            st.session_state["df"] = DEMOS[demo_name](n=n)
+            st.session_state["df"] = DEMOS[demo_name]()
             st.session_state["source_name"] = demo_name
-            st.sidebar.success(
-                f"已载入 {len(st.session_state['df']):,} 行示例数据"
-            )
+            st.sidebar.success(f"已载入 {len(st.session_state['df']):,} 行示例数据")
 
     df = st.session_state.get("df")
     if df is not None:
@@ -289,6 +283,19 @@ def tab_overview(df, analysis) -> None:
         m2.metric("列数", q["列数"])
         m3.metric("重复行", f"{q['重复行']:,}")
         m4.metric("缺失单元格", f"{q['缺失单元格']:,}")
+        kpi = analysis.get("kpi") or {}
+        if kpi.get("总销售额") is not None:
+            st.subheader("经营 KPI")
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("累计销售额", f"{kpi['总销售额']:,.0f} 元")
+            k2.metric("毛利率", f"{kpi.get('毛利率') or 0:.1%}")
+            k3.metric("客单价", f"{kpi.get('客单价') or 0:.2f} 元")
+            k4.metric("会员订单占比", f"{kpi.get('会员订单占比') or 0:.1%}")
+            if kpi.get("月度环比") is not None:
+                yoy = f"，同比 {kpi['月度同比']:.1%}" if kpi.get("月度同比") is not None else ""
+                st.caption(
+                    f"最近月份 {kpi.get('最近月份', '')}：销售额环比 {kpi['月度环比']:.1%}{yoy}"
+                )
     st.caption("原始数据预览（前 1000 行）")
     st.dataframe(df.head(1000), use_container_width=True, hide_index=True)
     if analysis:
@@ -424,11 +431,23 @@ def tab_predictive(df, analysis) -> None:
     fig.tight_layout()
     st.pyplot(fig)
 
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("模型拟合 R²", f"{ts['r2']:.2f}")
     m2.metric("趋势斜率", f"{ts['slope']:,.2f} / 期")
     m3.metric("下一期预测", f"{ts['forecast'][0]:,.0f}")
+    bt = ts.get("backtest")
+    if bt and bt.get("mape") is not None:
+        m4.metric("样本外回测 MAPE", f"{bt['mape']:.1%}")
+        m5.metric("朴素基线 MAPE", f"{bt['mape_naive']:.1%}" if bt.get("mape_naive") is not None else "—")
+    else:
+        m4.metric("样本外回测 MAPE", "—")
+        m5.metric("朴素基线 MAPE", "—")
     st.caption(f"模型：{ts['model']} ｜ 周期数：{ts['n']}")
+    if bt and bt.get("improve") is not None:
+        st.caption(
+            f"回测说明：留出后 {bt['n_test']} 期做样本外验证，"
+            f"预测误差较朴素基线改善 {bt['improve']:.1%}（RMSE={bt.get('rmse', 0):,.0f}）"
+        )
 
     fc = pd.DataFrame(
         {
@@ -452,6 +471,18 @@ def tab_prescriptive(analysis) -> None:
             st.line_chart(to["days"].rename("周转天数"))
         elif to.get("turnover") is not None:
             st.line_chart(to["turnover"].rename("动销强度"))
+    abc_xyz = analysis.get("abc_xyz")
+    if abc_xyz is not None and len(abc_xyz):
+        st.subheader("ABC × XYZ 库存矩阵")
+        st.dataframe(abc_xyz, use_container_width=True, hide_index=True)
+        st.caption(
+            "ABC：按销售额累计贡献划分 A(≤70%) / B(≤90%) / C(其余)；"
+            "XYZ：按月度需求波动系数划分 X(稳定) / Y(波动) / Z(高波动)"
+        )
+    promo = analysis.get("promo_lift")
+    if promo is not None and len(promo):
+        st.subheader("促销归因（按品类销量提升）")
+        st.dataframe(promo, use_container_width=True, hide_index=True)
     st.subheader("💡 规范化建议（可执行）")
     for tip in analysis.get("strategy", []):
         st.success(tip)
