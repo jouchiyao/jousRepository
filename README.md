@@ -245,7 +245,7 @@ ORDER BY 配送日期;
 
 ### 数据库英文缩写列名（如 delivery_datafull）
 
-`prictice.delivery_datafull`（1,770 万行）使用纯英文缩写列名，已自动兼容识别：
+`delivery_datafull`（示例表，1,770 万行）使用纯英文缩写列名，已自动兼容识别：
 
 | 列名 | 语义角色 |
 | --- | --- |
