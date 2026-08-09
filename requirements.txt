@@ -1,0 +1,11 @@
+streamlit>=1.35
+pandas>=2.2
+numpy>=1.26
+matplotlib>=3.8
+sqlalchemy>=2.0
+pymysql>=1.1
+psycopg2-binary>=2.9
+supabase-py>=2.4
+python-dotenv>=1.0
+user-agents>=2.2
+openpyxl>=3.1

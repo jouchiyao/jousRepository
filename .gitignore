@@ -1,0 +1,10 @@
+.env
+data/
+__pycache__/
+*.pyc
+.DS_Store
+.streamlit/secrets.toml
+.venv/
+
+# 大数据文件（约 66MB）：云端部署可省略，应用会自动回退到较小的示例数据集
+sample_data/real_store_full_demo.csv
