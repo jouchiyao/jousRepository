@@ -6,7 +6,10 @@ matplotlib>=3.8,<4
 sqlalchemy>=2.0,<3
 pymysql>=1.1,<2
 psycopg2-binary>=2.9,<3
-supabase-py>=2.4,<3
 python-dotenv>=1.0,<2
 user-agents>=2.2,<3
 openpyxl>=3.1,<4
+
+# 说明：supabase-py 目前无 Python 3.13/3.14 版本，Streamlit 云端默认 Python 3.14，
+# 故共享版不安装它，访客计数自动降级为本地存储；如需启用 Supabase 计数，
+# 请在云端 Advanced settings 选择 Python 3.12 并把 supabase-py>=2.4,<3 加回本文件。

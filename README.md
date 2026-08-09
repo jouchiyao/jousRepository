@@ -179,6 +179,11 @@ MAX_ROWS = "300000"
 > 免费版说明：Streamlit Cloud 免费额度为约 1GB 内存、50GB 带宽/月、私密应用 1 个。
 > 1700 万行明细不要直接整表载入，先在 SQL 里聚合（见下节）。
 
+> **Python 版本说明**：Streamlit Cloud 默认使用 Python 3.14，而 `supabase-py` 目前没有
+> 3.13/3.14 版本，因此共享版默认**不安装 supabase-py**（访客计数自动降级为本地存储）。
+> 如需启用 Supabase 访客计数：部署时在 **Advanced settings → Python version** 选择
+> **3.12**，并把 `supabase-py>=2.4,<3` 加回 `requirements.txt`。
+
 ---
 
 ## 八、连接你的 1700 万行 MySQL 数据
