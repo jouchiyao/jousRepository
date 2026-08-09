@@ -412,13 +412,16 @@ def time_series_analysis(
         train, test = ts.iloc[:-n_test], ts.iloc[-n_test:]
         x_tr = np.arange(len(train), dtype=float)
         slope_tr, intercept_tr = np.polyfit(x_tr, train.values.astype(float), 1)
+        # 季节项 = 训练段“去趋势后”的偏差（月度均值），避免与回归水平重复叠加
+        fitted_tr = intercept_tr + slope_tr * x_tr
+        dev_tr = train.values.astype(float) - fitted_tr
         if freq == "ME":
             key_tr, key_te = train.index.month, test.index.month
         elif freq == "YE":
             key_tr, key_te = train.index.year, test.index.year
         else:
             key_tr, key_te = train.index.dayofweek, test.index.dayofweek
-        season_tr = train.groupby(key_tr).mean()
+        season_tr = pd.Series(dev_tr, index=train.index).groupby(key_tr).mean()
         preds = []
         for i, k in enumerate(key_te):
             base = intercept_tr + slope_tr * (len(train) + i)
