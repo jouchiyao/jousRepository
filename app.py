@@ -44,6 +44,42 @@ FREQ_OPTIONS = {"按月": "ME", "按周": "W", "按日": "D", "按年": "YE"}
 _CJK_SETUP_DONE = False
 
 
+def _has_cjk_font(font_manager) -> bool:
+    for name in ("Noto Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", "SimHei", "PingFang SC", "WenQuanYi Zen Hei"):
+        if any(f.name == name for f in font_manager.fontManager.ttflist):
+            return True
+    return False
+
+
+def _download_noto(font_manager) -> None:
+    """内置字体缺失时的备用方案：从 CDN 下载 Noto Sans SC（OFL 开源协议）。"""
+    try:
+        import tempfile
+        import urllib.request
+
+        cache = os.path.join(tempfile.gettempdir(), "codex_fonts")
+        os.makedirs(cache, exist_ok=True)
+        dest = os.path.join(cache, "NotoSansSC-Regular.otf")
+        if not os.path.exists(dest):
+            urls = [
+                "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+                "https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf",
+            ]
+            ok = False
+            for url in urls:
+                try:
+                    urllib.request.urlretrieve(url, dest)
+                    ok = True
+                    break
+                except Exception:  # noqa: BLE001
+                    continue
+            if not ok:
+                return
+        font_manager.fontManager.addfont(dest)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _setup_cjk_font() -> None:
     """注册系统中文字体并配置 matplotlib，避免热力图/时序图中文变乱码（豆腐块）。"""
     global _CJK_SETUP_DONE
@@ -55,6 +91,18 @@ def _setup_cjk_font() -> None:
 
         from matplotlib import font_manager
 
+        # 1) 优先注册仓库内置的 Noto Sans SC（OFL 开源协议，云端可直接使用）
+        bundled = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "assets", "fonts", "NotoSansSC-Regular.otf",
+        )
+        if os.path.exists(bundled):
+            try:
+                font_manager.fontManager.addfont(bundled)
+            except Exception:  # noqa: BLE001
+                pass
+
+        # 2) 注册系统常见中文字体
         candidates = [
             r"C:\Windows\Fonts\msyh.ttc",
             r"C:\Windows\Fonts\msyh.ttf",
@@ -71,9 +119,16 @@ def _setup_cjk_font() -> None:
                     font_manager.fontManager.addfont(p)
                 except Exception:  # noqa: BLE001
                     pass
+
+        # 3) 仍无中文字体时从 CDN 下载（备用）
+        if not _has_cjk_font(font_manager):
+            _download_noto(font_manager)
+
         import matplotlib.pyplot as plt
 
         plt.rcParams["font.sans-serif"] = [
+            "Noto Sans SC",
+            "Noto Sans CJK SC",
             "Microsoft YaHei",
             "SimHei",
             "PingFang SC",

@@ -137,7 +137,7 @@ def build_report_md(results: dict[str, Any]) -> str:
     L.append("---")
 
     # ---------- 一、现象 ----------
-    L.append("## 一、现象（发生了什么）")
+    L.append("## 一、现象")
     L.append("")
     q = results["quality"]
     L.append(
@@ -165,7 +165,7 @@ def build_report_md(results: dict[str, Any]) -> str:
     L.append("")
 
     # ---------- 二、归因 ----------
-    L.append("## 二、归因（为什么发生）")
+    L.append("## 二、归因")
     L.append("")
     pareto = results.get("pareto")
     if pareto and pareto.get("table") is not None and not pareto["table"].empty:
@@ -205,7 +205,7 @@ def build_report_md(results: dict[str, Any]) -> str:
     L.append("")
 
     # ---------- 三、预测 ----------
-    L.append("## 三、预测（下一步会怎样）")
+    L.append("## 三、预测")
     L.append("")
     ts = results.get("ts")
     if ts:
@@ -222,7 +222,7 @@ def build_report_md(results: dict[str, Any]) -> str:
     L.append("")
 
     # ---------- 四、策略 ----------
-    L.append("## 四、策略（应该怎么办）")
+    L.append("## 四、策略")
     L.append("")
     for tip in _build_strategy(results, labels):
         L.append(f"- {tip}")
